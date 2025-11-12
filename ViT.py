@@ -72,6 +72,7 @@ class Transformer(nn.Module):
 class ThaVit(nn.Module):
     def __init__(self, *, image_size, patch_size, num_classes, dim, depth, heads, mlp_dim, channels = 3, dim_head = 64):
         super().__init__()
+        self.cls_token = nn.Parameter(torch.randn(1, 1, dim))
         image_height, image_width = pair(image_size)
         patch_height, patch_width = pair(patch_size)
         assert image_height % patch_height == 0 and image_width % patch_width == 0, 'Image dimensions must be divisible by the patch size.'
@@ -84,12 +85,14 @@ class ThaVit(nn.Module):
             nn.LayerNorm(dim),
         )
 
-        self.pos_embedding = posemb_sincos_2d(
+        pos_emb_patches = posemb_sincos_2d(
             h = image_height // patch_height,
             w = image_width // patch_width,
             dim = dim
         )
 
+        cls_pos_emb = torch.zeros(1, dim)
+        self.pos_embedding = torch.cat((cls_pos_emb, pos_emb_patches), dim=0)
         self.transformer = Transformer(dim, depth, heads, dim_head, mlp_dim)
         self.pool = "mean"
         self.to_latent = nn.Identity()
@@ -98,8 +101,10 @@ class ThaVit(nn.Module):
     def forward(self, img):
         device = img.device
         x = self.to_patch_embedding(img)
+        b, n, _ = x.shape
+        cls_tokens = self.cls_token.expand(b, -1, -1)
+        x = torch.cat((cls_tokens, x), dim=1)
         x += self.pos_embedding.to(device, dtype=x.dtype)
         x = self.transformer(x)
-        x = x.mean(dim = 1)
-        x = self.to_latent(x)
+        x = x[:, 0]
         return self.linear_head(x)

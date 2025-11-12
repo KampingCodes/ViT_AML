@@ -30,7 +30,7 @@ v = ThaVit(
     mlp_dim=128 * 4,
 )
 
-v.load_state_dict(torch.load('ViT.pth', map_location = torch.device('cuda')))
+v.load_state_dict(torch.load('ViT.pth', map_location = torch.device('cpu')))
 v.eval()
 
 correct = 0

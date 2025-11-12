@@ -10,6 +10,7 @@ LEARNING_RATE = 3e-4
 EPOCHS = 10
 DECORR_LOSS_WEIGHT = 1e-1
 TRACK_EXPERIMENT_ONLINE = False
+WEIGHT_DECAY = 1e-4
 
 # helpers
 def exists(v):
@@ -33,19 +34,19 @@ dataloader = DataLoader(dataset, batch_size = BATCH_SIZE, shuffle = True)
 # model
 from ViT import ThaVit
 v = ThaVit(
-    dim = 128,
+    dim = 256,
     num_classes = 10,
     image_size = 32,
     patch_size = 4,
-    depth = 6,
+    depth = 8,
     heads = 8,
     dim_head = 64,
-    mlp_dim = 128 * 4,
+    mlp_dim = 1024,
 )
 
 # optim
 from torch.optim import Adam
-optim = Adam(v.parameters(), lr = LEARNING_RATE)
+optim = Adam(v.parameters(), lr = LEARNING_RATE, weight_decay = WEIGHT_DECAY)
 
 # prepare
 from accelerate import Accelerator
