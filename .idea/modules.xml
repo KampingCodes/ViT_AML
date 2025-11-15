@@ -2,6 +2,7 @@
 <project version="4">
   <component name="ProjectModuleManager">
     <modules>
+      <module fileurl="file://$PROJECT_DIR$/../../ML Class Files/VIT_Project/.idea/VIT_Project.iml" filepath="$PROJECT_DIR$/../../ML Class Files/VIT_Project/.idea/VIT_Project.iml" />
       <module fileurl="file://$PROJECT_DIR$/.idea/ViT_AML.iml" filepath="$PROJECT_DIR$/.idea/ViT_AML.iml" />
     </modules>
   </component>
