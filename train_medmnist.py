@@ -1,5 +1,6 @@
 import math
 import random
+import numpy as np
 import torch
 import torch.nn.functional as F
 from torch import nn
@@ -21,7 +22,7 @@ WEIGHT_DECAY  = 5e-2
 NUM_WORKERS   = 0
 SEED          = 1337
 
-# ChestMNIST is 128x128 grayscale, multi-label with 14 classes
+# ChestMNIST - 128x128 grayscale, multi-label with 14 classes
 IMAGE_SIZE    = 128
 PATCH_SIZE    = 8
 NUM_CLASSES   = 14
@@ -103,6 +104,39 @@ def make_loaders():
     )
     return train_loader, val_loader
 
+def topk_hit_rate(probs, labels, k=5):
+    """
+    probs:  (N, C) numpy array, sigmoid outputs in [0,1]
+    labels: (N, C) numpy array, 0/1 ground truth (multi-label)
+
+    Returns:
+        fraction of samples where at least one true positive label
+        appears in the top-k predicted labels.
+    """
+    N, C = probs.shape
+    hits = 0
+    valid = 0
+
+    for i in range(N):
+        true_pos = np.where(labels[i] > 0.5)[0]
+
+        # no positive labels -> skip from metric
+        if true_pos.size == 0:
+            continue
+
+        # indices of top-k probabilities
+        topk_idx = np.argpartition(probs[i], -k)[-k:]
+
+        if np.intersect1d(true_pos, topk_idx).size > 0:
+            hits += 1
+
+        valid += 1
+
+    if valid == 0:
+        return float("nan")
+
+    return hits / valid
+
 
 # training / eval
 def train_one_epoch(model, loader, optimizer, scheduler, device):
@@ -110,10 +144,13 @@ def train_one_epoch(model, loader, optimizer, scheduler, device):
     criterion = nn.BCEWithLogitsLoss()
 
     total_loss, steps = 0.0, 0
+    all_logits = []
+    all_labels = []
 
     for x, y in loader:
         x = x.to(device)
 
+        # y: ensure float, shape (B, num_labels)
         y = torch.as_tensor(y, device=device).float()
         if y.ndim > 2:
             y = y.view(y.size(0), -1)
@@ -131,23 +168,38 @@ def train_one_epoch(model, loader, optimizer, scheduler, device):
         total_loss += loss.item()
         steps += 1
 
-    return total_loss / steps
+        # store for AUC computation
+        all_logits.append(logits.detach().cpu())
+        all_labels.append(y.detach().cpu())
 
+    avg_loss = total_loss / steps
+
+    all_logits = torch.cat(all_logits, dim=0)
+    all_labels = torch.cat(all_labels, dim=0)
+
+    probs = torch.sigmoid(all_logits).numpy()
+    labels = all_labels.numpy()
+
+    try:
+        train_auc = roc_auc_score(labels, probs)
+    except ValueError:
+        # happens if some class is all 0 or all 1 in this split
+        train_auc = float("nan")
+
+    return avg_loss, train_auc
 
 @torch.no_grad()
-def evaluate(model, loader, device):
+def evaluate(model, loader, device, k=5):
     model.eval()
     criterion = nn.BCEWithLogitsLoss()
 
     total_loss, steps = 0.0, 0
-
     all_logits = []
     all_labels = []
 
     for x, y in loader:
         x = x.to(device)
 
-        # y: convert to float, shape (B, num_labels)
         y = torch.as_tensor(y, device=device).float()
         if y.ndim > 2:
             y = y.view(y.size(0), -1)
@@ -163,22 +215,22 @@ def evaluate(model, loader, device):
 
     avg_loss = total_loss / steps
 
-    # stack all batches into (N, num_labels)
     all_logits = torch.cat(all_logits, dim=0)
     all_labels = torch.cat(all_labels, dim=0)
 
-    # convert to numpy
     probs = torch.sigmoid(all_logits).numpy()
     labels = all_labels.numpy()
 
-    # Compute macro and micro AUC
+    # macro AUC
     try:
-        auc = roc_auc_score(labels, probs)
+        val_auc = roc_auc_score(labels, probs, average="macro")
     except ValueError:
-        # This happens if some label is all 0 or all 1 in the eval set
-        auc = float("nan")
+        val_auc = float("nan")
 
-    return avg_loss, auc
+    # top-K hit rate
+    val_topk = topk_hit_rate(probs, labels, k=k)
+
+    return avg_loss, val_auc, val_topk
 
 
 # main
@@ -220,18 +272,19 @@ def main():
 
     best_val_auc = 0.0
     for epoch in range(EPOCHS):
-        tr_loss = train_one_epoch(model, train_loader, optimizer, scheduler, device)
-        va_loss, va_auc = evaluate(model, val_loader, device)
+        tr_loss, tr_auc = train_one_epoch(model, train_loader, optimizer, scheduler, device)
+        va_loss, va_auc, top5 = evaluate(model, val_loader, device, k=5)
 
         print(
             f"Epoch {epoch + 1:02d}/{EPOCHS} | "
-            f"train loss {tr_loss:.4f} | "
-            f"val loss {va_loss:.4f} ROC AUC {va_auc:.4f}"
+            f"train loss {tr_loss:.4f} AUC {tr_auc:.4f} | "
+            f"val loss {va_loss:.4f} AUC {va_auc:.4f} | "
+            f"top-5 hit {top5 * 100:.2f}%"
         )
 
-
-        if not math.isnan(va_auc) and va_auc > best_val_auc:
-            best_val_auc = va_auc
+        score_for_ckpt = va_auc
+        if not math.isnan(score_for_ckpt) and score_for_ckpt > best_val_auc:
+            best_val_auc = score_for_ckpt
             torch.save({"model": model.state_dict()}, "vit_chestmnist_best.pt")
             print(f"✓ saved checkpoint (val_auc={best_val_auc:.4f})")
 
